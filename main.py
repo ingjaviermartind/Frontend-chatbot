@@ -1,6 +1,9 @@
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, ApplicationBuilder, MessageHandler, \
 ConversationHandler, CallbackQueryHandler, filters
+# -- -- #
+from dotenv import load_dotenv
+import os
 # --------------------- Controllers --------------------- #
 from Controllers.DefaultController import DefaultController
 from Controllers.AuthController import AuthController
@@ -16,8 +19,8 @@ async def show_chat_id(update, context):
         f"titulo: {chat.title}"
     )
 
- 
-Token = "8457868045:AAFzAPMEPKlrZylBpusJh6b1-N4IiegTpkU"
+load_dotenv()
+Token = os.getenv("TELEGRAM_BOT_TOKEN")
 Application = ApplicationBuilder().token(Token).build()
 Application.bot_data["alarmas_requests"] = {}
 # -- main -- #
