@@ -46,6 +46,7 @@ class OperationController:
     async def PreguntarDepartamentoLM(update : Update, context : ContextTypes.DEFAULT_TYPE):
         if not await DefaultController.require_auth(update, context):
             return ConversationHandler.END
+        
         dept_service = DeptService(context)
         depts = await DefaultController.safe_request(
             update,
