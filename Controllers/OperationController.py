@@ -9,6 +9,15 @@ from Models.Node import NodeService
 from Models.Contractor import ContractorService
 from Models.Analiyst import AnalystService
 
+from Services.Department import DepartmentService as DeptService
+from Services.Municipality import MunicipalityService as MunService
+from Models.Department import Department as DeptObject
+from Models.Municipality import Municipality as MunObject
+from ApiClient.ApiClient import SessionExpired
+import httpx
+
+from .DefaultController import DefaultController
+
 class OperationController:
     # -- Municipality -- #
     CM_OBT_DEPT, CM_OBT_NOMBRE, CM_OBT_DANE = range(3)
@@ -25,6 +34,7 @@ class OperationController:
     CN_OBT_DEPT, CN_OBT_MUN, CN_OBT_COD, CN_OBT_DIR, CN_PRE_IPV4, CN_OBT_IPV4 = range(6)
     LN_OBT_DEPT, LN_OBT_MUN = range(2)
     BN_OBT_DEPT, BN_OBT_MUN, BN_OBT_NODO = range(3)
+
     @staticmethod
     async def CancelConversation(update : Update, context : ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⭕ operación cancelada")
@@ -34,20 +44,19 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarDepartamentoLM(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] == "user":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
+        if not await DefaultController.require_auth(update, context):
             return ConversationHandler.END
-        try:
-            departments = DepartmentService.read_department()
-            DepartmentsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(departments, start=1)])
-            await update.message.reply_text(f"Los departamentos disponibles son:\n{DepartmentsMsg}")
-            context.user_data["departments"] = departments
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error consultando departamentos. {e}")
+        dept_service = DeptService(context)
+        depts = await DefaultController.safe_request(
+            update,
+            dept_service.read()
+        )
+        if not depts:
+            await update.message.reply_text("⚠️ No se encontraron departamentos disponibles.")
             return ConversationHandler.END
+        msg = DefaultController.build_numbered_list(depts, lambda d : d.Name)
+        await update.message.reply_text(f"Los departamentos disponibles son:\n{msg}")
+        context.user_data["departments"] = depts
         await update.message.reply_text("¿En cuál departamento vas a consultar los municipios?")
         return OperationController.LM_OBT_DEPT
     
@@ -55,25 +64,22 @@ class OperationController:
     async def ObtenerDepartamentoLM(update : Update, context : ContextTypes.DEFAULT_TYPE):
         try:
             choice = int(update.message.text)
-            departments = context.user_data.get("departments", [])
-            if choice < 1 or choice > len(departments):
-                raise ValueError
-            selected_department = departments[choice - 1]
-            await update.message.reply_text(
-                f"✅ Departamento seleccionado: {selected_department['name']}"
-            )
+            selected_department : DeptObject = DefaultController.select_from_context(context, "departments", choice)
+            await update.message.reply_text(f"✅ Departamento seleccionado: {selected_department.Name}")
         except ValueError:
-            await update.message.reply_text(
-                "❌ Selección inválida. Por favor ingresa un número de la lista."
-            )
-        try:
-            municipalities = MunicipalityService.read_municipality(selected_department.get('departmentid'))
-            municipalityMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(municipalities, start=1)])
-            await update.message.reply_text(f"Los municipios del departamento {selected_department.get('name')} son:\n{municipalityMsg}")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error consultando municipios. {e}")
-        finally:
+            await update.message.reply_text("❌ Selección inválida. Por favor ingresa un número de la lista.")
+            return OperationController.LM_OBT_DEPT
+        mun_service = MunService(context)
+        municipalities = await DefaultController.safe_request(
+            update, 
+            mun_service.read(selected_department)
+        )
+        if not municipalities:
+            await update.message.reply_text("⚠️ No se encontraron municipios disponibles.")
             return ConversationHandler.END
+        msg = DefaultController.build_numbered_list(municipalities, lambda m: m.Name)
+        await update.message.reply_text(f"Los municipios del departamento {selected_department.Name} son:\n{msg}")
+        return ConversationHandler.END
     
     read_municipality_conversation_handler = ConversationHandler(
         entry_points=[CommandHandler("listar_municipios", PreguntarDepartamentoLM)],
@@ -87,20 +93,19 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarDepartamentoCM(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
+        if not await DefaultController.require_auth(update, context, admin=True):
             return ConversationHandler.END
-        try:
-            departments = DepartmentService.read_department()
-            DepartmentsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(departments, start=1)])
-            await update.message.reply_text(f"Los departamentos disponibles son:\n{DepartmentsMsg}")
-            context.user_data["departments"] = departments
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error consultando departamentos. {e}")
+        dept_service : DeptService = DeptService(context)
+        depts : list[DeptObject] = await DefaultController.safe_request(
+            update,
+            dept_service.read()
+        )
+        if not depts:
+            await update.message.reply_text("⚠️ No se encontraron departamentos disponibles.")
             return ConversationHandler.END
+        deptsMsg = DefaultController.build_numbered_list(depts, lambda d : d.Name)
+        await update.message.reply_text(f"Los departamentos disponibles son:\n{deptsMsg}")
+        context.user_data["departments"] = depts
         await update.message.reply_text("¿En cuál departamento está el municipio que vas a crear?")
         return OperationController.CM_OBT_DEPT
 
@@ -108,14 +113,9 @@ class OperationController:
     async def ObtenerDepartamentoCM(update : Update, context : ContextTypes.DEFAULT_TYPE):
         try:
             choice = int(update.message.text)
-            departments = context.user_data.get("departments", [])
-            if choice < 1 or choice > len(departments):
-                raise ValueError
-            selected_department = departments[choice - 1]
+            selected_department : DeptObject = DefaultController.select_from_context(context, "departments", choice)
+            await update.message.reply_text(f"✅ Departamento seleccionado: {selected_department.Name}")
             context.user_data["department"] = selected_department
-            await update.message.reply_text(
-                f"✅ Departamento seleccionado: {selected_department['name']}"
-            )
         except ValueError:
             await update.message.reply_text(
                 "❌ Selección inválida. Por favor ingresa un número de la lista."
@@ -126,19 +126,19 @@ class OperationController:
     @staticmethod
     async def ObtenerNombreCM(update : Update, context : ContextTypes.DEFAULT_TYPE):
         new_name = update.message.text
-        department = context.user_data.get("department")
-        try:
-            municipalities = MunicipalityService.read_municipality(department.get('departmentid'))
-            existing_names = {
-                municipality["name"].strip().lower()
-                for municipality in municipalities
-                if "name" in municipality
-            }
-            if new_name.strip().lower() in existing_names:
-                await update.message.reply_text("❌ Ya existe un municipio con ese nombre")
-                return ConversationHandler.END
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error consultando municipios. {e}")
+        department : DeptObject = context.user_data.get("department")
+        mun_service = MunService(context)
+        municipalities = await DefaultController.safe_request(
+            update,
+            mun_service.read(department)
+        )
+        existing_names = {
+            municipality.Name.strip().lower()
+            for municipality in municipalities
+            if municipality.Name
+        }
+        if new_name.strip().lower() in existing_names:
+            await update.message.reply_text("❌ Ya existe un municipio con ese nombre")
             return ConversationHandler.END
         context.user_data["name"] = new_name
         await update.message.reply_text("✅ Nombre de municipio valido")
@@ -157,7 +157,7 @@ class OperationController:
             if not num_clean.isdigit():
                 raise ValueError("El número telefónico debe contener solo números")
             return num_clean
-        department = context.user_data.get("department")
+        department : DeptObject = context.user_data.get("department")
         dane = update.message.text
         try:
             clean_dane = normalize_num(dane)
@@ -167,21 +167,21 @@ class OperationController:
                 f"❌ Error: {e}.\nPor favor escribe el *código dane* sin espacios."
             )
             return OperationController.CM_OBT_DANE
-        department = context.user_data.get("department") 
-        try:
-            MunicipalityService.create_municipality(
-                DeptID=department.get("departmentid"),
-                Dane=clean_dane,
-                Name=context.user_data["name"]
-            )
-            await update.message.reply_text("✅ Municipio creado exitosamente")
-            municipalities = MunicipalityService.read_municipality(department.get('departmentid'))
-            municipalityMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(municipalities, start=1)])
-            await update.message.reply_text(f"Los municipios del departamento {department.get('name')} son:\n{municipalityMsg}")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error: {e}")
-        finally:
-            return ConversationHandler.END
+        department : DeptObject = context.user_data.get("department") 
+        Mun : MunObject = MunObject(department,context.user_data["name"],clean_dane)
+        mun_service = MunService(context)
+        await DefaultController.safe_request(
+            update,
+            mun_service.create(Mun)
+        )
+        await update.message.reply_text("✅ Municipio creado exitosamente")
+        municipalities : list[MunObject] = await DefaultController.safe_request(
+            update,
+            mun_service.read(department)
+        )
+        municipalityMsg = DefaultController.build_numbered_list(municipalities, lambda m: m.Name)
+        await update.message.reply_text(f"Los municipios del departamento {department.Name} son:\n{municipalityMsg}")
+        return ConversationHandler.END
 
     create_municipality_conversation_handler = ConversationHandler(
         entry_points=[CommandHandler("crear_municipio", PreguntarDepartamentoCM)],
@@ -193,24 +193,24 @@ class OperationController:
         fallbacks=[CommandHandler("cancel", CancelConversation)]
     )
     #
-    # Conversación para editar municipios
+    # Conversación para editar municipios 
     #
     @staticmethod
     async def PreguntarDepartamentoEM(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
+        if not await DefaultController.require_auth(update,context,admin=True):
             return ConversationHandler.END
-        try:
-            departments = DepartmentService.read_department()
-            DepartmentsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(departments, start=1)])
-            await update.message.reply_text(f"Los departamentos disponibles son:\n{DepartmentsMsg}")
-            context.user_data["departments"] = departments
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error consultando departamentos. {e}")
+        
+        dept_service : DeptService = DeptService(context)
+        depts : list[DeptObject] = await DefaultController.safe_request(
+            update,
+            dept_service.read()
+        )
+        if not depts:
+            await update.message.reply_text("⚠️ No se encontraron departamentos disponibles.")
             return ConversationHandler.END
+        deptsMsg = DefaultController.build_numbered_list(depts, lambda d : d.Name)
+        await update.message.reply_text(f"Los departamentos disponibles son:\n{deptsMsg}")
+        context.user_data["departments"] = depts
         await update.message.reply_text("¿En cuál departamento está el municipio que vas a editar?")
         return OperationController.EM_OBT_DEPT
 
@@ -218,47 +218,36 @@ class OperationController:
     async def ObtenerDepartamentoEM(update : Update, context : ContextTypes.DEFAULT_TYPE):
         try:
             choice = int(update.message.text)
-            departments = context.user_data.get("departments", [])
-            if choice < 1 or choice > len(departments):
-                raise ValueError
-            selected_department = departments[choice - 1]
+            selected_department : DeptObject = DefaultController.select_from_context(context, "departments", choice)
+            await update.message.reply_text(f"✅ Departamento seleccionado: {selected_department.Name}")
             context.user_data["department"] = selected_department
-            await update.message.reply_text(
-                f"✅ Departamento seleccionado: {selected_department['name']}"
-            )
         except ValueError:
             await update.message.reply_text(
                 "❌ Selección inválida. Por favor ingresa un número de la lista."
             )
-        try:
-            municipalities = MunicipalityService.read_municipality(selected_department.get('departmentid'))
-            context.user_data["municipalities"] = municipalities
-            municipalityMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(municipalities, start=1)])
-            await update.message.reply_text(f"Los municipios del departamento {selected_department.get('name')} son:\n{municipalityMsg}")
-            await update.message.reply_text("¿cuál es el municipio que vas a editar?")
-            return OperationController.EM_OBT_MUN
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error consultando municipios. {e}")
-            return ConversationHandler.END
-        
+        mun_service = MunService(context)
+        municipalities = await DefaultController.safe_request(
+            update,
+            mun_service.read(selected_department)
+        )  
+        context.user_data["municipalities"] = municipalities
+        municipalityMsg = DefaultController.build_numbered_list(municipalities, lambda m: m.Name)
+        await update.message.reply_text(f"Los municipios del departamento {selected_department.Name} son:\n{municipalityMsg}")
+        await update.message.reply_text("¿cuál es el municipio que vas a editar?")
+        return OperationController.EM_OBT_MUN
+
     @staticmethod
     async def ObtenerMunicipioEM(update : Update, context : ContextTypes.DEFAULT_TYPE):
         try:
             choice = int(update.message.text)
-            municipalities = context.user_data.get("municipalities", [])
-            if choice < 1 or choice > len(municipalities):
-                raise ValueError
-            selected_municipality = municipalities[choice - 1]
+            selected_municipality = DefaultController.select_from_context(context, "municipalities", choice)
             context.user_data["municipality"] = selected_municipality
-            await update.message.reply_text(
-                f"✅ Municipio seleccionado: {selected_municipality['name']}"
-            )
+            await update.message.reply_text(f"✅ Municipio seleccionado: {selected_municipality.Name}")
         except ValueError:
             await update.message.reply_text(
                 "❌ Selección inválida. Por favor ingresa un número de la lista."
             )
             return OperationController.EM_OBT_MUN
-        
         await update.message.reply_text("¿Vas a editar el nombre del municipio?\n1. Sí\n2. No")
         return OperationController.EM_PRE_NOMBRE
 
@@ -282,19 +271,19 @@ class OperationController:
     @staticmethod 
     async def ObtenerNombreEM(update : Update, context : ContextTypes.DEFAULT_TYPE):
         new_name = update.message.text
-        department = context.user_data.get("department")
-        try:
-            municipalities = MunicipalityService.read_municipality(department.get('departmentid'))
-            existing_names = {
-                municipality["name"].strip().lower()
-                for municipality in municipalities
-                if "name" in municipality
-            }
-            if new_name.strip().lower() in existing_names:
-                await update.message.reply_text("❌ Ya existe un municipio con ese nombre")
-                return ConversationHandler.END
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error consultando municipios. {e}")
+        department : DeptObject = context.user_data.get("department")
+        mun_service = MunService(context)
+        municipalities : list[MunObject] = await DefaultController.safe_request(
+            update,
+            mun_service.read(department)
+        )
+        existing_names = {
+            municipality.Name.strip().lower()
+            for municipality in municipalities
+            if municipality.Name
+        }
+        if new_name.strip().lower() in existing_names:
+            await update.message.reply_text("❌ Ya existe un municipio con ese nombre")
             return ConversationHandler.END
         context.user_data["name"] = new_name
         await update.message.reply_text("✅ Nombre de municipio valido")
@@ -317,19 +306,23 @@ class OperationController:
         except ValueError:
             await update.message.reply_text("❌ Selección inválida. Por favor ingresa un número de la lista.")
             return OperationController.EM_PRE_DANE
-        municipality = context.user_data.get("municipality")
-        department = context.user_data.get("department")
-        try:
-            MunicipalityService.update_municipality(
-                Name=context.user_data["name"],
-                MunID=municipality.get("municipalityid")
-            )
-            await update.message.reply_text("✅ Municipio editado exitosamente")
-            municipalities = MunicipalityService.read_municipality(department.get('departmentid'))
-            municipalityMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(municipalities, start=1)])
-            await update.message.reply_text(f"Los municipios del departamento {department.get('name')} son:\n{municipalityMsg}")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error: {e}")
+        municipality : MunObject = context.user_data.get("municipality")
+        MunName = context.user_data["name"]
+        if MunName is not None:
+            municipality.Name = MunName
+        mun_service = MunService(context)
+        await DefaultController.safe_request(
+            update,
+            mun_service.update(municipality)
+        )
+        await update.message.reply_text("✅ Municipio editado exitosamente")
+
+        municipalities = await DefaultController.safe_request(
+            update,
+            mun_service.read(municipality.Department)
+        )
+        municipalityMsg = DefaultController.build_numbered_list(municipalities, lambda m : m.Name)
+        await update.message.reply_text(f"Los municipios del departamento {municipality.Department.Name} son:\n{municipalityMsg}")
         return ConversationHandler.END
 
     @staticmethod
@@ -345,7 +338,6 @@ class OperationController:
                 raise ValueError("El número telefónico debe contener solo números")
             return num_clean
         municipality = context.user_data.get("municipality")
-        department = context.user_data.get("department")
         dane = update.message.text
         try:
             clean_dane = normalize_num(dane)
@@ -355,20 +347,24 @@ class OperationController:
                 f"❌ Error: {e}.\nPor favor escribe el *código dane* sin espacios."
             )
             return OperationController.CM_OBT_DANE
-        try:
-            MunicipalityService.update_municipality(
-                Name=context.user_data["name"],
-                Dane=clean_dane,
-                MunID=municipality.get("municipalityid")
-            )
-            await update.message.reply_text("✅ Municipio editado exitosamente")
-            municipalities = MunicipalityService.read_municipality(department.get('departmentid'))
-            municipalityMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(municipalities, start=1)])
-            await update.message.reply_text(f"Los municipios del departamento {department.get('name')} son:\n{municipalityMsg}")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Error: {e}")
-        finally:
-            return ConversationHandler.END
+        municipality : MunObject = context.user_data.get("municipality")
+        MunName = context.user_data["name"]
+        if MunName is not None:
+            municipality.Name = MunName
+        municipality.Dane = clean_dane
+        mun_service = MunService(context)
+        await DefaultController.safe_request(
+            update,
+            mun_service.update(municipality)
+        )
+        await update.message.reply_text("✅ Municipio editado exitosamente")
+        municipalities = await DefaultController.safe_request(
+            update,
+            mun_service.read(municipality.Department)
+        )
+        municipalityMsg = DefaultController.build_numbered_list(municipalities, lambda m : m.Name)
+        await update.message.reply_text(f"Los municipios del departamento {municipality.Department.Name} son:\n{municipalityMsg}")
+        return ConversationHandler.END
 
     update_municipality_conversation_handler = ConversationHandler(
         entry_points=[CommandHandler("editar_municipio", PreguntarDepartamentoEM)],
@@ -383,16 +379,12 @@ class OperationController:
         fallbacks=[CommandHandler("cancel", CancelConversation)]
     )
     #
-    # Conversación para crear contratistas
+    # Conversación para crear contratistas <- voy acá
     #
     @staticmethod
     async def PreguntarNombreCC(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
-            return ConversationHandler.END  
+        if not await DefaultController.require_auth(update,context,admin=True):
+            return ConversationHandler.END
         await update.message.reply_text("¿cuál es el nombre de la empresa contratista?")
         return OperationController.CC_OBT_NOMBRE
     
@@ -436,12 +428,8 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarNombreBC(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
-            return ConversationHandler.END  
+        if not await DefaultController.require_auth(update,context,admin=True):
+            return ConversationHandler.END
         try:
             contractors = ContractorService.read_contractor(True)
             contractorsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(contractors, start=1)])
@@ -498,12 +486,8 @@ class OperationController:
     #
     @staticmethod
     async def ListarContratistas(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
-            return ConversationHandler.END  
+        if not await DefaultController.require_auth(update,context,admin=True):
+            return ConversationHandler.END
         try:
             contractors = ContractorService.read_contractor(True)
             contractorsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(contractors, start=1)])
@@ -528,12 +512,8 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarContratistaLA(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
-            return ConversationHandler.END  
+        if not await DefaultController.require_auth(update,context,admin=True):
+            return ConversationHandler.END
         try:
             contractors = ContractorService.read_contractor(True)
             contractorsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(contractors, start=1)])
@@ -591,12 +571,8 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarContratistaCA(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
-            return ConversationHandler.END  
+        if not await DefaultController.require_auth(update,context,admin=True):
+            return ConversationHandler.END
         try:
             contractors = ContractorService.read_contractor(True)
             contractorsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(contractors, start=1)])
@@ -675,12 +651,8 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarContratistaBA(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
-            return ConversationHandler.END  
+        if not await DefaultController.require_auth(update,context,admin=True):
+            return ConversationHandler.END
         try:
             contractors = ContractorService.read_contractor(True)
             contractorsMsg = "\n".join([f"{i}. {b['name']}" for i, b in enumerate(contractors, start=1)])
@@ -782,11 +754,7 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarDepartamentoCN(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] != "admin":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
+        if not await DefaultController.require_auth(update,context,admin=True):
             return ConversationHandler.END
         try:
             departments = DepartmentService.read_department()
@@ -955,11 +923,7 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarDepartamentoLN(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] == "user":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
+        if not await DefaultController.require_auth(update,context,admin=True):
             return ConversationHandler.END
         try:
             departments = DepartmentService.read_department()
@@ -1043,11 +1007,7 @@ class OperationController:
     #
     @staticmethod
     async def PreguntarDepartamentoBN(update : Update, context : ContextTypes.DEFAULT_TYPE):
-        if not AuthController.IsAuthenticated(context):
-            await update.message.reply_text("⚠️ Autenticate primero.")
-            return ConversationHandler.END     
-        if context.user_data["permission"] == "user":
-            await update.message.reply_text("⚠️ No tienes permiso de usar esta función.")
+        if not await DefaultController.require_auth(update,context,admin=True):
             return ConversationHandler.END
         try:
             departments = DepartmentService.read_department()

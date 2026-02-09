@@ -1,6 +1,6 @@
 import asyncio
 import httpx
-from Config import Configuration
+from .Config import Configuration
 
 class SessionExpired(Exception):
     pass

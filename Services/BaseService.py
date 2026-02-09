@@ -1,5 +1,5 @@
 from abc import ABC
-from ApiClient.ApiClient import ApiClient
+from ApiClient.ApiClient import ApiClient,SessionExpired
 from Models.Object import BaseObject
 
 class BaseService(ABC):
@@ -18,7 +18,10 @@ class BaseService(ABC):
         response = await self.api.post(self.endpoint, json=Object.to_payload())
         return self._to_object(response.json())
 
-    #async def update(self, )
+    async def update(self, Object : BaseObject):
+        if Object.ID is None:
+            raise ValueError("Cannot update object without ID")
+        return await self.api.patch(self.endpoint+f"{Object.ID}/", json=Object.to_payload())
 
     def _to_object(self, data : dict):
         raise NotImplementedError

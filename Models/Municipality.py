@@ -1,5 +1,41 @@
 import requests
 from Models.Config import Configuration
+from .Object import BaseObject
+from .Department import Department as DeptObject
+
+class Municipality(BaseObject):
+    def __init__(self, dept : DeptObject, name : str, dane : int, ID : int | None = None):
+        super().__init__(ID)
+        self._name = name
+        self._dane = dane
+        self._dept = dept
+
+    @property
+    def Name(self) -> str:
+        return self._name
+    
+    @Name.setter
+    def Name(self, value):
+        self._name = value
+
+    @property
+    def Dane(self) -> int:
+        return self._dane
+    
+    @Dane.setter
+    def Dane(self, value):
+        self._dane = value 
+    
+    @property
+    def Department(self) -> DeptObject:
+        return self._dept
+    
+    def to_payload(self) -> dict:
+        return {
+            "name": self.Name,
+            "dane": self.Dane,
+            "departmentid": self.Department.ID
+        }
 
 class MunicipalityService:
 
